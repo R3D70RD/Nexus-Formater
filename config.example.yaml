@@ -1,0 +1,21 @@
+# Copy this file to config.yaml and adjust to your setup.
+# Any value here can also be overridden with a CLI flag, e.g. --model llama3.1.
+
+input_dir: vault_raw          # your messy, copy-pasted notes (never modified)
+output_dir: vault_processed   # atomic notes get written here
+review_dir: vault_review      # diffs + quality report land here
+log_dir: logs
+# state_dir: vault_processed/.nexus_state   # uncomment to customize; defaults under output_dir
+
+prompt_template: prompt_template.md
+
+model: llama3.1
+base_url: http://localhost:11434
+temperature: 0.2
+timeout: 180
+
+max_retries: 3
+backoff_base: 2               # seconds; wait time grows with each retry attempt
+
+max_notes_per_batch: 5        # how many small notes to pack into one request
+max_chars_per_batch: 6000     # start a new batch once this many characters are queued

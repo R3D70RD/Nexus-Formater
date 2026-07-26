@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# personal, machine-specific config -- keep config.example.yaml in git instead
+config.yaml
+
+# generated content, not source
+logs/
+vault_processed/
+vault_review/
+.nexus_state/
