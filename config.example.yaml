@@ -1,5 +1,9 @@
 # Copy this file to config.yaml and adjust to your setup.
 # Any value here can also be overridden with a CLI flag, e.g. --model llama3.1.
+#
+# PDF text extract is a separate command (no LLM):
+#   python main.py extract ./lectures_pdf
+# It writes a sibling folder lectures_pdf_extracted/ for you to process later.
 
 input_dir: vault_raw          # your messy, copy-pasted notes (never modified)
 output_dir: vault_processed   # atomic notes get written here
@@ -9,7 +13,7 @@ log_dir: logs
 
 prompt_template: prompt_template.md
 
-model: llama3.1
+model: llama3.2
 base_url: http://localhost:11434
 temperature: 0.2
 timeout: 180

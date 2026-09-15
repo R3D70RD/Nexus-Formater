@@ -79,11 +79,12 @@ def run(config: Config, client: Optional[object] = None) -> dict:
     stats = {"success": 0, "failed": 0, "skipped": skipped, "total": len(all_files)}
     progress = Progress(total=len(pending))
 
-    for batch in batches:
-        _process_batch(batch, client, config, manifest, stats, progress)
-        save_manifest(manifest, config.manifest_path)  # persist after every batch
-
-    progress.done()
+    try:
+        for batch in batches:
+            _process_batch(batch, client, config, manifest, stats, progress)
+            save_manifest(manifest, config.manifest_path)  # persist after every batch
+    finally:
+        progress.done()
     logger.info("Done. %d succeeded, %d failed, %d skipped (of %d total).",
                 stats["success"], stats["failed"], stats["skipped"], stats["total"])
     return stats

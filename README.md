@@ -1,14 +1,15 @@
 # NEXUS Note Formatter
 
-Batch-converts messy, copy-pasted Obsidian notes into atomic, RAG-friendly
-knowledge notes using a local LLM (via [Ollama](https://ollama.com)).
+Extract PDF lecture notes **1:1** (layout and accents preserved, no LLM
+rewrite), then optionally batch-convert those notes into atomic,
+RAG-friendly Obsidian notes using a local LLM (via [Ollama](https://ollama.com)).
 
 ```
-Input Folder ──▶ read note.md ──▶ batch with other small notes ──▶ send to LLM
-                                                                       │
-Output Folder ◀── write .md (+ frontmatter) ◀── parse response ◀──────┘
-     │
-     └──▶ Review Folder: diff vs. original + quality report
+PDF folder ──▶ extract (PyMuPDF, Unicode) ──▶ <folder>_extracted/*.md
+                                                    │
+                                                    ▼
+                              format (optional LLM rewrite) ──▶ vault_processed
+                                                              └── vault_review
 ```
 
 Originals are **never modified**. Already-processed, unchanged notes are
@@ -17,15 +18,17 @@ Originals are **never modified**. Already-processed, unchanged notes are
 
 ## Why this exists
 
-Manually reformatting PDF-copied lecture notes into clean Obsidian notes is
-slow. This script automates the reformatting step: point it at a folder of
-raw `.md` notes, and it sends them to your local model with a fixed prompt
-that turns each one into an atomic note with structured sections, YAML
-frontmatter, and wikilinks — the way Obsidian (and a RAG pipeline reading
-your vault) actually wants them.
+Manually copy-pasting PDFs (and losing accents like é / ê / è) then
+reformatting lecture notes is slow. `extract` dumps each PDF into a sibling
+`*_extracted` folder as faithful Markdown/text. `format` is a separate,
+optional step that sends already-extracted `.md` notes to your local model.
 
 ## Features
 
+- **PDF extract (1:1)** — copies PDF text the way a careful copy-paste
+  would: Unicode NFC, overlay accents merged onto letters, line/paragraph
+  breaks kept. The LLM is **not** used and does **not** simplify the page.
+  Output lands in `<original-folder>_extracted` next to the PDF folder.
 - **Batching** — small notes (e.g. `TCP.md`, `UDP.md`, `DNS.md`) are packed
   into a single LLM request instead of one call per file; large notes are
   sent alone. Controlled by `max_notes_per_batch` / `max_chars_per_batch`.
@@ -58,7 +61,9 @@ your vault) actually wants them.
 ## Requirements
 
 - Python 3.9+
-- [Ollama](https://ollama.com) installed and running (`ollama serve`), with
+- For `extract`: [PyMuPDF](https://pymupdf.readthedocs.io/) (installed via
+  `requirements.txt`)
+- For `format`: [Ollama](https://ollama.com) running (`ollama serve`), with
   a model pulled (e.g. `ollama pull llama3.1`)
 
 ## Install
@@ -76,30 +81,41 @@ you want to convert, and `model` to whatever you pulled in Ollama.
 ## Usage
 
 ```bash
-# See what would happen without calling the LLM
-python main.py --dry-run
+python main.py --help
+python main.py extract --help
+python main.py format --help
 
-# Run for real
-python main.py
+# 1:1 PDF → markdown in a sibling folder (no LLM)
+python main.py extract ./lectures_pdf
+# writes ./lectures_pdf_extracted/*.md  (nested PDFs keep their subfolders)
 
-# Reprocess everything, ignoring the skip-cache
-python main.py --force
+python main.py extract ./lectures_pdf --dry-run
+python main.py extract ./lectures_pdf --format txt --force
+python main.py extract ./lectures_pdf/chap1.pdf -o ./notes_raw
 
-# Iterate on the prompt against a single note
-python main.py --only TCP.md --verbose
+# Optional: LLM rewrite of already-extracted notes
+python main.py format --input ./lectures_pdf_extracted --dry-run
+python main.py format --input ./lectures_pdf_extracted
+python main.py format --force
+python main.py format --only TCP.md --verbose
 ```
 
+Bare flags (`python main.py --dry-run`) still run `format` for compatibility.
 Every setting in `config.yaml` can be overridden on the command line, e.g.
-`python main.py --model mistral --batch-size 1` (useful for weaker local
-models that struggle to follow the multi-note batching format reliably —
+`python main.py format --model mistral --batch-size 1` (useful for weaker
+local models that struggle to follow the multi-note batching format reliably —
 see Limitations below).
-
-Run `python main.py --help` for the full flag list.
 
 ## Output layout
 
 ```
-vault_raw/            your original notes (never touched)
+lectures_pdf/                 originals (never touched)
+  week1/chap1.pdf
+
+lectures_pdf_extracted/       sibling folder written by `extract`
+  week1/chap1.md              1:1 text, UTF-8, page breaks as ---
+
+vault_raw/                    your original notes (never touched)
   Networking/TCP.md
 
 vault_processed/       atomic notes, ready to drop into Obsidian
@@ -170,11 +186,8 @@ pytest
 
 ## Roadmap / not yet built
 
-This first version handles **Markdown in → Markdown out**. Ideas from the
-original design discussion that are deliberately out of scope for now:
+Ideas from the original design discussion that are still out of scope:
 
-- PDF/other-source text extraction (today you still need your notes in
-  `.md` form as input)
 - Automatic vector DB indexing after generation
 - AI-suggested links validated against your existing vault (today
   `Related Concepts` links are the model's best guess and may point to
@@ -187,9 +200,7 @@ original design discussion that are deliberately out of scope for now:
   instructions entirely will just produce `needs_review: true` notes or
   failures — check `vault_review/quality_report.md` and `logs/failed.csv`
   after your first run against a new model.
-- `source` paths in frontmatter use OS-native path separators; this is only
-  a cosmetic concern if you run the tool from both Windows and macOS/Linux
-  against the same vault.
+- Scanned image-only PDFs have no text layer; this extractor cannot OCR them.
 
 ## License
 
