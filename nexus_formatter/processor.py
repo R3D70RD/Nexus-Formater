@@ -16,6 +16,7 @@ from .manifest import load_manifest, mark_failed, mark_success, needs_processing
 from .ollama_client import OllamaClient, OllamaError
 from .parsing import (
     build_user_prompt,
+    is_empty_note,
     normalize_frontmatter,
     parse_batch_response,
     render_note,
@@ -34,6 +35,13 @@ def discover_notes(config: Config) -> List[Path]:
     return files
 
 
+def _is_empty_file(path: Path) -> bool:
+    try:
+        return is_empty_note(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+
+
 def run(config: Config, client: Optional[object] = None) -> dict:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.review_dir.mkdir(parents=True, exist_ok=True)
@@ -50,8 +58,18 @@ def run(config: Config, client: Optional[object] = None) -> dict:
         return str(f.relative_to(config.input_dir))
 
     pending = [f for f in all_files if needs_processing(rel(f), f, manifest, config.output_dir, config.force)]
+
+    # Drop empty/whitespace-only notes before they reach the LLM: there is
+    # nothing to transform, and sending them wastes a batch slot and risks
+    # the model inventing content.
+    empty = [f for f in pending if _is_empty_file(f)]
+    if empty:
+        for f in empty:
+            logger.info("SKIP  %s (empty note)", f.relative_to(config.input_dir))
+        pending = [f for f in pending if f not in empty]
+
     skipped = len(all_files) - len(pending)
-    logger.info("Found %d note(s): %d to process, %d already up to date.",
+    logger.info("Found %d note(s): %d to process, %d already up to date or empty.",
                 len(all_files), len(pending), skipped)
 
     if config.dry_run:

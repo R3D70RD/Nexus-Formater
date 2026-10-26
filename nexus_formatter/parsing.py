@@ -14,8 +14,13 @@ NOTE_RE = re.compile(
     re.DOTALL,
 )
 FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n?(.*)$', re.DOTALL)
+FENCED_BLOCK_RE = re.compile(r'^```[^\n]*\n(.*?)\n```\s*$', re.DOTALL)
 QUALITY_MARKER = ">>>QUALITY_RATING<<<"
 RATING_RE = re.compile(r'Rating:\s*(\d+(?:\.\d+)?)\s*/\s*10', re.IGNORECASE)
+
+# Bump when the output contract in prompt_template.md changes in a way the
+# parser needs to know about. Kept here so tests can assert on it.
+PROMPT_VERSION = 2
 
 
 def build_user_prompt(batch: Dict[int, Path]) -> str:
@@ -33,12 +38,31 @@ def build_user_prompt(batch: Dict[int, Path]) -> str:
     return "\n\n".join(parts)
 
 
+def strip_code_fences(text: str) -> str:
+    """Remove a single wrapping ```...``` fence if the whole text is fenced.
+
+    Models frequently wrap their output in a fence despite instructions not
+    to. Only unwraps when the fence spans the entire (stripped) text, so
+    legitimate fenced code inside a note body is left alone.
+    """
+    stripped = text.strip()
+    m = FENCED_BLOCK_RE.match(stripped)
+    if m:
+        return m.group(1).strip()
+    return stripped
+
+
+def is_empty_note(text: str) -> bool:
+    """True if a note body is empty or whitespace-only (after fence stripping)."""
+    return not strip_code_fences(text).strip()
+
+
 def parse_batch_response(raw: str, batch: Dict[int, Path]) -> Dict[int, str]:
     results = {}
     for m in NOTE_RE.finditer(raw):
         note_id = int(m.group(1))
         if note_id in batch:
-            results[note_id] = m.group(2).strip()
+            results[note_id] = strip_code_fences(m.group(2))
     return results
 
 
@@ -55,6 +79,7 @@ def extract_rating(quality_text: str) -> Optional[float]:
 
 
 def split_frontmatter(note_body: str) -> Tuple[dict, str]:
+    note_body = strip_code_fences(note_body)
     m = FRONTMATTER_RE.match(note_body)
     if not m:
         return {}, note_body.strip()

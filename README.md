@@ -182,6 +182,8 @@ batching/skip/retry logic without a running Ollama server:
 ```bash
 pip install pytest
 pytest
+python -m pytest tests/test_pipeline.py -q
+python -m pytest -q
 ```
 
 ## Roadmap / not yet built

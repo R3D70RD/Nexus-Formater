@@ -70,3 +70,61 @@ Missing: no mention of congestion control edge cases.
 
 Do not wrap anything in code fences. Do not add commentary outside the
 markers. Do not merge multiple input notes into one output block.
+
+If a note is empty or contains only whitespace, still emit the start/end
+markers for it, but leave the body empty (no frontmatter, no quality
+marker). Do not invent content for an empty note.
+
+If a note is already well-formed and atomic, preserve its structure and
+wording; only make the minimal edits needed to satisfy the rules above.
+
+### Worked example
+
+Input:
+
+>>>NOTE_START id=0001 file="tcp.md"<<<
+tcp is reliable, as discussed in lecture 3. it does handshakes. will be on exam
+>>>NOTE_END id=0001<<<
+
+Output:
+
+>>>NOTE_START id=0001 file="tcp.md"<<<
+---
+type: concept
+domain: networking
+tags:
+  - transport-layer
+  - reliability
+aliases:
+  - Transmission Control Protocol
+---
+# TCP
+
+## Purpose
+TCP is a reliable, connection-oriented transport-layer protocol.
+
+## Key Ideas
+- Establishes connections via a handshake.
+- Guarantees ordered, reliable delivery.
+
+## Related Concepts
+[[UDP]], [[OSI Model]]
+
+## Search Keywords
+Transmission Control Protocol, reliable transport
+>>>QUALITY_RATING<<<
+Rating: 8/10
+Missing: no mention of congestion control.
+>>>NOTE_END id=0001<<<
+
+### Negative example (do NOT do this)
+
+Do not wrap the frontmatter in a code fence:
+
+```yaml
+---
+type: concept
+---
+```
+
+Instead, emit the frontmatter directly, starting with `---` on its own line.

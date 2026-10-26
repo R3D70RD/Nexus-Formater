@@ -3,6 +3,7 @@ so no real Ollama server is required."""
 from pathlib import Path
 
 from nexus_formatter.config import Config
+from nexus_formatter.parsing import PROMPT_VERSION, parse_batch_response, strip_code_fences
 from nexus_formatter.processor import run
 from tests.mock_client import AlwaysFailClient, MockOllamaClient
 
@@ -128,3 +129,58 @@ def test_api_failure_marks_notes_as_failed(tmp_path):
     assert not (config.output_dir / "TCP.md").exists()
     failed_csv = (config.log_dir / "failed.csv").read_text(encoding="utf-8")
     assert "TCP.md" in failed_csv
+
+
+def test_empty_notes_are_skipped_without_calling_llm(tmp_path):
+    config, input_dir = make_config(tmp_path)
+    write_note(input_dir, "EMPTY.md", "   \n\n\t\n")
+    write_note(input_dir, "TCP.md", "TCP content")
+
+    client = MockOllamaClient()
+    stats = run(config, client=client)
+
+    assert client.calls == 1  # only the non-empty note was sent
+    assert stats["success"] == 1
+    assert stats["skipped"] == 1
+    assert not (config.output_dir / "EMPTY.md").exists()
+
+
+def test_parse_batch_response_tolerates_code_fences(tmp_path):
+    batch = {1: tmp_path / "a.md"}
+    raw = (
+        '>>>NOTE_START id=0001 file="a.md"<<<\n'
+        "```markdown\n"
+        "---\ntype: concept\n---\n# A\n"
+        "```\n"
+        ">>>NOTE_END id=0001<<<"
+    )
+    parsed = parse_batch_response(raw, batch)
+    assert 1 in parsed
+    assert parsed[1].startswith("---")
+    assert "```" not in parsed[1]
+
+
+def test_parse_batch_response_ignores_prose_outside_markers(tmp_path):
+    batch = {1: tmp_path / "a.md"}
+    raw = (
+        "Sure, here is the note you asked for:\n\n"
+        '>>>NOTE_START id=0001 file="a.md"<<<\n'
+        "---\ntype: concept\n---\n# A\n"
+        ">>>NOTE_END id=0001<<<\n\n"
+        "Let me know if you need anything else!"
+    )
+    parsed = parse_batch_response(raw, batch)
+    assert parsed[1].startswith("---")
+    assert "Sure" not in parsed[1]
+    assert "Let me know" not in parsed[1]
+
+
+def test_strip_code_fences_only_unwraps_whole_text():
+    assert strip_code_fences("```\nhello\n```") == "hello"
+    # A fence in the middle of a body must be preserved.
+    body = "intro\n```python\nprint(1)\n```\noutro"
+    assert strip_code_fences(body) == body
+
+
+def test_prompt_version_is_defined():
+    assert isinstance(PROMPT_VERSION, int) and PROMPT_VERSION >= 1

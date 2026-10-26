@@ -11,3 +11,4 @@ logs/
 vault_processed/
 vault_review/
 .nexus_state/
+.aider*
