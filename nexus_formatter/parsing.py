@@ -13,6 +13,8 @@ NOTE_RE = re.compile(
     r'>>>NOTE_START\s+id=(\d{4})[^\n<]*<<<(.*?)>>>NOTE_END\s+id=\1<<<',
     re.DOTALL,
 )
+NOTE_START_RE = re.compile(r'>>>NOTE_START\s+id=(\d{4})[^\n<]*<<<')
+NOTE_END_RE = re.compile(r'>>>NOTE_END\s+id=(\d{4})<<<')
 FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n?(.*)$', re.DOTALL)
 FENCED_BLOCK_RE = re.compile(r'^```[^\n]*\n(.*?)\n```\s*$', re.DOTALL)
 QUALITY_MARKER = ">>>QUALITY_RATING<<<"
@@ -55,6 +57,26 @@ def strip_code_fences(text: str) -> str:
 def is_empty_note(text: str) -> bool:
     """True if a note body is empty or whitespace-only (after fence stripping)."""
     return not strip_code_fences(text).strip()
+
+
+class TruncatedResponseError(Exception):
+    """Raised when the model's response contains an unterminated note block.
+
+    This almost always means the model hit its output token limit
+    (done_reason=length) and was cut off mid-note. Retrying the same prompt
+    will truncate again, so callers should not retry.
+    """
+
+    def __init__(self, message: str, missing_ids: list):
+        super().__init__(message)
+        self.missing_ids = missing_ids
+
+
+def find_unterminated_ids(raw: str, batch: Dict[int, Path]) -> list:
+    """Return ids that have a >>>NOTE_START<<< but no matching >>>NOTE_END<<<."""
+    started = {int(m.group(1)) for m in NOTE_START_RE.finditer(raw)}
+    ended = {int(m.group(1)) for m in NOTE_END_RE.finditer(raw)}
+    return sorted(i for i in started - ended if i in batch)
 
 
 def parse_batch_response(raw: str, batch: Dict[int, Path]) -> Dict[int, str]:
