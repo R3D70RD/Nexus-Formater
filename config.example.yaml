@@ -10,6 +10,7 @@ output_dir: vault_processed   # atomic notes get written here
 review_dir: vault_review      # diffs + quality report land here
 log_dir: logs
 # state_dir: vault_processed/.nexus_state   # uncomment to customize; defaults under output_dir
+# staging_dir: vault_raw_extracted          # used by `run`; defaults to <input_dir>_extracted
 
 prompt_template: prompt_template.md
 

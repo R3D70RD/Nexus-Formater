@@ -17,6 +17,7 @@ DEFAULTS = {
     "review_dir": "vault_review",
     "log_dir": "logs",
     "state_dir": None,  # computed from output_dir if not set
+    "staging_dir": None,  # computed from input_dir if not set
     "prompt_template": "prompt_template.md",
     "model": "llama3.1",
     "base_url": "http://localhost:11434",
@@ -46,6 +47,7 @@ class Config:
     backoff_base: float
     max_notes_per_batch: int
     max_chars_per_batch: int
+    staging_dir: Optional[Path] = None
     force: bool = False
     dry_run: bool = False
     only: Optional[str] = None
@@ -54,6 +56,13 @@ class Config:
     @property
     def manifest_path(self) -> Path:
         return self.state_dir / "manifest.json"
+
+    @property
+    def resolved_staging_dir(self) -> Path:
+        """Staging folder used by `run`; defaults to <input_dir>_extracted."""
+        if self.staging_dir is not None:
+            return self.staging_dir
+        return self.input_dir.parent / f"{self.input_dir.name}_extracted"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -86,6 +95,9 @@ def build_config(cli_args) -> Config:
     state_dir_val = pick("state_dir", cli_args.state_dir)
     state_dir = Path(state_dir_val) if state_dir_val else output_dir / ".nexus_state"
 
+    staging_val = pick("staging_dir", getattr(cli_args, "staging_dir", None))
+    staging_dir = Path(staging_val) if staging_val else None
+
     prompt_template_path = Path(pick("prompt_template", cli_args.prompt_template))
     if not prompt_template_path.exists():
         print(f"ERROR: prompt template not found: {prompt_template_path}", file=sys.stderr)
@@ -112,6 +124,7 @@ def build_config(cli_args) -> Config:
         review_dir=review_dir,
         log_dir=log_dir,
         state_dir=state_dir,
+        staging_dir=staging_dir,
         prompt_template_path=prompt_template_path,
         system_prompt=system_prompt,
         model=pick("model", cli_args.model),
