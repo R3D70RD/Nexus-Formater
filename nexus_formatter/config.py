@@ -87,9 +87,9 @@ def build_config(cli_args) -> Config:
             return file_cfg[key]
         return DEFAULTS[key]
 
-    input_dir = Path(pick("input_dir", cli_args.input))
-    output_dir = Path(pick("output_dir", cli_args.output))
-    review_dir = Path(pick("review_dir", cli_args.review))
+    input_dir = Path(pick("input_dir", getattr(cli_args, "input", None)))
+    output_dir = Path(pick("output_dir", getattr(cli_args, "output", None)))
+    review_dir = Path(pick("review_dir", getattr(cli_args, "review", None)))
     log_dir = Path(pick("log_dir", cli_args.log_dir))
 
     state_dir_val = pick("state_dir", cli_args.state_dir)
