@@ -108,6 +108,25 @@ def test_dropped_note_in_batch_falls_back_to_individual_retry(tmp_path):
     assert (config.output_dir / "UDP.md").exists()
 
 
+def test_truncated_batch_fails_without_individual_retry(tmp_path):
+    config, input_dir = make_config(tmp_path, max_notes_per_batch=3)
+    write_note(input_dir, "TCP.md", "TCP content")
+    write_note(input_dir, "UDP.md", "UDP content")
+
+    client = MockOllamaClient(truncate_ids={2})
+    stats = run(config, client=client)
+
+    # Only the truncated note fails; the clean one still succeeds.
+    assert stats["success"] == 1
+    assert stats["failed"] == 1
+    # No pointless individual retry for the truncated note.
+    assert client.calls == 1
+    assert not (config.output_dir / "UDP.md").exists()
+    failed_csv = (config.log_dir / "failed.csv").read_text(encoding="utf-8")
+    assert "UDP.md" in failed_csv
+    assert "done_reason=length" in failed_csv
+
+
 def test_force_reprocesses_even_when_unchanged(tmp_path):
     config, input_dir = make_config(tmp_path)
     write_note(input_dir, "TCP.md", "TCP content")
