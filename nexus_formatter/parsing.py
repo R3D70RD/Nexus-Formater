@@ -13,9 +13,16 @@ NOTE_RE = re.compile(
     r'>>>NOTE_START\s+id=(\d{4})[^\n<]*<<<(.*?)>>>NOTE_END\s+id=\1<<<',
     re.DOTALL,
 )
+NOTE_START_RE = re.compile(r'>>>NOTE_START\s+id=(\d{4})[^\n<]*<<<')
+NOTE_END_RE = re.compile(r'>>>NOTE_END\s+id=(\d{4})<<<')
 FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n?(.*)$', re.DOTALL)
+FENCED_BLOCK_RE = re.compile(r'^```[^\n]*\n(.*?)\n```\s*$', re.DOTALL)
 QUALITY_MARKER = ">>>QUALITY_RATING<<<"
 RATING_RE = re.compile(r'Rating:\s*(\d+(?:\.\d+)?)\s*/\s*10', re.IGNORECASE)
+
+# Bump when the output contract in prompt_template.md changes in a way the
+# parser needs to know about. Kept here so tests can assert on it.
+PROMPT_VERSION = 2
 
 
 def build_user_prompt(batch: Dict[int, Path]) -> str:
@@ -33,12 +40,51 @@ def build_user_prompt(batch: Dict[int, Path]) -> str:
     return "\n\n".join(parts)
 
 
+def strip_code_fences(text: str) -> str:
+    """Remove a single wrapping ```...``` fence if the whole text is fenced.
+
+    Models frequently wrap their output in a fence despite instructions not
+    to. Only unwraps when the fence spans the entire (stripped) text, so
+    legitimate fenced code inside a note body is left alone.
+    """
+    stripped = text.strip()
+    m = FENCED_BLOCK_RE.match(stripped)
+    if m:
+        return m.group(1).strip()
+    return stripped
+
+
+def is_empty_note(text: str) -> bool:
+    """True if a note body is empty or whitespace-only (after fence stripping)."""
+    return not strip_code_fences(text).strip()
+
+
+class TruncatedResponseError(Exception):
+    """Raised when the model's response contains an unterminated note block.
+
+    This almost always means the model hit its output token limit
+    (done_reason=length) and was cut off mid-note. Retrying the same prompt
+    will truncate again, so callers should not retry.
+    """
+
+    def __init__(self, message: str, missing_ids: list):
+        super().__init__(message)
+        self.missing_ids = missing_ids
+
+
+def find_unterminated_ids(raw: str, batch: Dict[int, Path]) -> list:
+    """Return ids that have a >>>NOTE_START<<< but no matching >>>NOTE_END<<<."""
+    started = {int(m.group(1)) for m in NOTE_START_RE.finditer(raw)}
+    ended = {int(m.group(1)) for m in NOTE_END_RE.finditer(raw)}
+    return sorted(i for i in started - ended if i in batch)
+
+
 def parse_batch_response(raw: str, batch: Dict[int, Path]) -> Dict[int, str]:
     results = {}
     for m in NOTE_RE.finditer(raw):
         note_id = int(m.group(1))
         if note_id in batch:
-            results[note_id] = m.group(2).strip()
+            results[note_id] = strip_code_fences(m.group(2))
     return results
 
 
@@ -55,6 +101,7 @@ def extract_rating(quality_text: str) -> Optional[float]:
 
 
 def split_frontmatter(note_body: str) -> Tuple[dict, str]:
+    note_body = strip_code_fences(note_body)
     m = FRONTMATTER_RE.match(note_body)
     if not m:
         return {}, note_body.strip()

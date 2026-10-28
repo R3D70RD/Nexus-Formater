@@ -39,6 +39,8 @@ def parse_args(argv=None) -> argparse.Namespace:
             "  python main.py extract ./lectures_pdf --format txt --dry-run\n"
             "  python main.py format --input ./lectures_pdf_extracted --dry-run\n"
             "  python main.py format --only TCP.md --verbose\n"
+            "  python main.py run ./lectures_pdf\n"
+            "  python main.py run ./lectures_pdf --json\n"
         ),
     )
     parser.add_argument("--version", action="store_true", help="Print version and exit")
@@ -80,6 +82,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     extract.add_argument("--dry-run", action="store_true", help="Show the plan without writing files")
     extract.add_argument("--only", help="Extract a single file by name (e.g. chapitre1.pdf)")
     extract.add_argument("--log-dir", default="logs", help="Folder for extract run logs (default: logs)")
+    extract.add_argument("--json", action="store_true", help="Emit machine-readable JSON to stdout")
     extract.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
 
     fmt = sub.add_parser(
@@ -89,16 +92,46 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     _add_format_flags(fmt)
 
+    run = sub.add_parser(
+        "run",
+        help="One-shot: extract PDFs, then LLM-format the result",
+        description=(
+            "Extract PDFs into a staging folder, then run the LLM formatter on "
+            "that staging folder. Output goes to config.output_dir."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  python main.py run ./vault_pdfs\n"
+            "  python main.py run ./vault_pdfs --dry-run\n"
+            "  python main.py run ./vault_pdfs --json\n"
+        ),
+    )
+    run.add_argument("input", help="PDF file or folder of PDFs")
+    run.add_argument(
+        "--staging-dir",
+        help="Where extracted Markdown is written before formatting "
+        "(default: <input-folder>_extracted)",
+    )
+    run.add_argument(
+        "--extract-format",
+        choices=("md", "txt"),
+        default="md",
+        help="Intermediate extract format (default: md)",
+    )
+    _add_format_flags(run, include_io=False)
+
     args = parser.parse_args(argv)
     args._parser = parser
     return args
 
 
-def _add_format_flags(p: argparse.ArgumentParser) -> None:
+def _add_format_flags(p: argparse.ArgumentParser, include_io: bool = True) -> None:
     p.add_argument("--config", help="Path to config.yaml (default: ./config.yaml if present)")
-    p.add_argument("--input", help="Folder of raw notes to read")
-    p.add_argument("--output", help="Folder to write processed notes to")
-    p.add_argument("--review", help="Folder for diffs / quality reports")
+    if include_io:
+        p.add_argument("--input", help="Folder of raw notes to read")
+        p.add_argument("--output", help="Folder to write processed notes to")
+        p.add_argument("--review", help="Folder for diffs / quality reports")
     p.add_argument("--log-dir", help="Folder for logs")
     p.add_argument("--state-dir", help="Folder for the manifest/skip-tracking state")
     p.add_argument("--prompt-template", help="Path to the system prompt template file")
@@ -112,6 +145,7 @@ def _add_format_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--force", action="store_true", help="Reprocess even if already up to date")
     p.add_argument("--dry-run", action="store_true", help="Show the plan without calling the LLM")
     p.add_argument("--only", help="Process a single file by name (e.g. TCP.md)")
+    p.add_argument("--json", action="store_true", help="Emit machine-readable JSON to stdout")
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose console/log output")
 
 
@@ -119,7 +153,7 @@ def _normalize_argv(argv: list) -> list:
     """Bare flags still run `format`, so older invocations keep working."""
     if not argv:
         return argv
-    if argv[0] in ("extract", "format", "-h", "--help", "--version"):
+    if argv[0] in ("extract", "format", "run", "-h", "--help", "--version"):
         return argv
     if argv[0].startswith("-"):
         return ["format"] + argv
@@ -143,6 +177,8 @@ def main(argv=None) -> int:
         return _cmd_extract(args)
     if args.command == "format":
         return _cmd_format(args)
+    if args.command == "run":
+        return _cmd_run(args)
     args._parser.print_help()
     return 1
 
@@ -252,6 +288,95 @@ def _cmd_format(args) -> int:
         f"(of {stats['total']} total)."
     )
     return 1 if stats["failed"] else 0
+
+
+def _cmd_run(args) -> int:
+    source = Path(args.input)
+    if not source.exists():
+        console.print(f"[red]ERROR[/red] input does not exist: {source}")
+        return 1
+
+    try:
+        extension = extract_format_from_name(args.extract_format)
+        staging = Path(args.staging_dir) if args.staging_dir else default_output_dir(source)
+    except ExtractError as e:
+        console.print(f"[red]ERROR[/red] {e}")
+        return 1
+
+    setup_logging(Path(args.log_dir or "logs"), verbose=args.verbose)
+
+    if not args.json:
+        _print_run_banner(source, staging, extension, args.dry_run)
+
+    try:
+        extract_stats = run_extract(
+            source=source,
+            output_dir=staging,
+            extension=extension,
+            force=args.force,
+            dry_run=args.dry_run,
+            only=args.only,
+            on_file=None if args.json else (
+                lambda pdf, out, status: _print_extract_row(pdf, out, status, staging)
+            ),
+        )
+    except ExtractError as e:
+        console.print(f"[red]ERROR[/red] {e}")
+        return 1
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        return 130
+
+    # Format reads from staging; output_dir comes from config/CLI.
+    args.input = str(staging)
+    config = build_config(args)
+    config.input_dir = staging
+
+    if not args.json:
+        _print_format_banner(config)
+
+    try:
+        format_stats = run_format(config)
+    except KeyboardInterrupt:
+        console.print(
+            "\n[yellow]Interrupted.[/yellow] Progress was saved to the manifest; re-run to resume."
+        )
+        return 130
+
+    if args.json:
+        import json as _json
+
+        payload = {
+            "extract": extract_stats,
+            "format": format_stats,
+            "staging_dir": str(staging),
+            "output_dir": str(config.output_dir),
+            "dry_run": bool(args.dry_run),
+        }
+        print(_json.dumps(payload, indent=2))
+    else:
+        console.print()
+        console.print(
+            f"[bold]Done.[/bold] extract: {extract_stats['success']} ok / "
+            f"{extract_stats['failed']} failed / {extract_stats['skipped']} skipped; "
+            f"format: {format_stats['success']} ok / "
+            f"{format_stats['failed']} failed / {format_stats['skipped']} skipped."
+        )
+
+    return 1 if (extract_stats["failed"] or format_stats["failed"]) else 0
+
+
+def _print_run_banner(source: Path, staging: Path, extension: str, dry_run: bool) -> None:
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("Source", str(source.expanduser().resolve()) if source.exists() else str(source))
+    table.add_row("Staging", str(staging))
+    table.add_row("Format", f"{extension.lstrip('.')} (1:1 copy, no LLM rewrite)")
+    if dry_run:
+        table.add_row("Mode", "[yellow]dry-run[/yellow]")
+    title = Text("NEXUS  ·  run", style="bold green")
+    console.print(Panel(table, title=title, border_style="green"))
 
 
 def _print_format_banner(config) -> None:

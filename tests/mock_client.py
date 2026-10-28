@@ -21,16 +21,27 @@ class MockOllamaClient:
         to individual processing).
     """
 
-    def __init__(self, drop_ids=None):
+    def __init__(self, drop_ids=None, truncate_ids=None):
         self.drop_ids = set(drop_ids or [])
+        self.truncate_ids = set(truncate_ids or [])
         self.calls = 0
+        self.last_done_reason = None
 
     def chat(self, system_prompt: str, user_prompt: str) -> str:
         self.calls += 1
+        self.last_done_reason = "stop"
         out = []
         for m in NOTE_RE.finditer(user_prompt):
             note_id, filename, content = int(m.group(1)), m.group(2), m.group(3)
             if note_id in self.drop_ids:
+                continue
+            if note_id in self.truncate_ids:
+                # Simulate hitting the output token limit mid-note.
+                self.last_done_reason = "length"
+                out.append(
+                    f'>>>NOTE_START id={note_id:04d} file="{filename}"<<<\n'
+                    f'---\ntype: concept\n---\n\n# {filename}\n\n```kot'
+                )
                 continue
             title = filename.rsplit(".", 1)[0]
             out.append(

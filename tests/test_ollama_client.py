@@ -2,7 +2,7 @@
 directly so the real retry loop is exercised (not simulated)."""
 from unittest.mock import MagicMock, patch
 
-from nexus_formatter.ollama_client import OllamaClient, OllamaError
+from nexus_formatter.ollama_client import OllamaClient, OllamaError, OllamaTruncatedError
 
 
 def _resp(status_code=200, json_data=None, text=""):
@@ -37,6 +37,48 @@ def test_gives_up_after_max_retries(mock_post):
     except OllamaError:
         pass
     assert mock_post.call_count == 3
+
+
+@patch("nexus_formatter.ollama_client.requests.post")
+def test_truncated_response_raises_without_retrying(mock_post):
+    mock_post.return_value = _resp(
+        200,
+        {
+            "message": {"content": '>>>NOTE_START id=0001 file="a.md"<<<\n```kot'},
+            "done_reason": "length",
+        },
+        text="",
+    )
+    client = OllamaClient("http://localhost:11434", "mock-model", max_retries=3)
+    try:
+        client.chat("sys", "user")
+        assert False, "expected OllamaTruncatedError"
+    except OllamaTruncatedError as e:
+        assert e.done_reason == "length"
+        assert "num_ctx" in str(e)
+    assert mock_post.call_count == 1
+    assert client.last_done_reason == "length"
+
+
+@patch("nexus_formatter.ollama_client.requests.post")
+def test_num_predict_and_num_ctx_are_sent_in_options(mock_post):
+    mock_post.return_value = _resp(200, {"message": {"content": "ok"}, "done_reason": "stop"})
+    client = OllamaClient("http://localhost:11434", "mock-model", num_predict=4096, num_ctx=16384)
+    client.chat("sys", "user")
+    sent = mock_post.call_args.kwargs["json"]
+    assert sent["options"]["num_predict"] == 4096
+    assert sent["options"]["num_ctx"] == 16384
+    assert client.last_done_reason == "stop"
+
+
+@patch("nexus_formatter.ollama_client.requests.post")
+def test_defaults_are_unlimited_predict_with_bounded_ctx(mock_post):
+    mock_post.return_value = _resp(200, {"message": {"content": "ok"}, "done_reason": "stop"})
+    client = OllamaClient("http://localhost:11434", "mock-model")
+    client.chat("sys", "user")
+    sent = mock_post.call_args.kwargs["json"]
+    assert sent["options"]["num_predict"] == -1
+    assert sent["options"]["num_ctx"] == 8192
 
 
 @patch("nexus_formatter.ollama_client.requests.post")

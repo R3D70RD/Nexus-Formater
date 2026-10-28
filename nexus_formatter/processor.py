@@ -13,9 +13,11 @@ from .batching import build_batches
 from .config import Config
 from .logging_setup import record_result
 from .manifest import load_manifest, mark_failed, mark_success, needs_processing, save_manifest
-from .ollama_client import OllamaClient, OllamaError
+from .ollama_client import OllamaClient, OllamaError, OllamaTruncatedError
 from .parsing import (
     build_user_prompt,
+    find_unterminated_ids,
+    is_empty_note,
     normalize_frontmatter,
     parse_batch_response,
     render_note,
@@ -34,6 +36,13 @@ def discover_notes(config: Config) -> List[Path]:
     return files
 
 
+def _is_empty_file(path: Path) -> bool:
+    try:
+        return is_empty_note(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+
+
 def run(config: Config, client: Optional[object] = None) -> dict:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.review_dir.mkdir(parents=True, exist_ok=True)
@@ -50,8 +59,18 @@ def run(config: Config, client: Optional[object] = None) -> dict:
         return str(f.relative_to(config.input_dir))
 
     pending = [f for f in all_files if needs_processing(rel(f), f, manifest, config.output_dir, config.force)]
+
+    # Drop empty/whitespace-only notes before they reach the LLM: there is
+    # nothing to transform, and sending them wastes a batch slot and risks
+    # the model inventing content.
+    empty = [f for f in pending if _is_empty_file(f)]
+    if empty:
+        for f in empty:
+            logger.info("SKIP  %s (empty note)", f.relative_to(config.input_dir))
+        pending = [f for f in pending if f not in empty]
+
     skipped = len(all_files) - len(pending)
-    logger.info("Found %d note(s): %d to process, %d already up to date.",
+    logger.info("Found %d note(s): %d to process, %d already up to date or empty.",
                 len(all_files), len(pending), skipped)
 
     if config.dry_run:
@@ -97,6 +116,13 @@ def _process_batch(batch, client, config: Config, manifest, stats, progress, _re
 
     try:
         raw = client.chat(config.system_prompt, build_user_prompt(ids))
+    except OllamaTruncatedError as e:
+        # Retrying the same prompt will truncate again; fail the whole batch
+        # with a diagnosable message instead.
+        logger.error("Batch truncated [%s]: %s", names, e)
+        for f in batch:
+            _record_failure(f, config, manifest, stats, progress, str(e))
+        return
     except OllamaError as e:
         logger.error("Batch failed [%s]: %s", names, e)
         for f in batch:
@@ -105,6 +131,22 @@ def _process_batch(batch, client, config: Config, manifest, stats, progress, _re
 
     parsed = parse_batch_response(raw, ids)
     missing = [i for i in ids if i not in parsed]
+
+    # Detect truncation: a >>>NOTE_START<<< with no matching >>>NOTE_END<<<
+    # means the model was cut off mid-note. Don't retry those individually.
+    unterminated = find_unterminated_ids(raw, ids)
+    if unterminated:
+        done_reason = getattr(client, "last_done_reason", None) or "unknown"
+        msg = (
+            f"Model output truncated (done_reason={done_reason}, "
+            f"{len(raw)} chars, unterminated note id(s)={unterminated}). "
+            f"Increase num_ctx or reduce batch size."
+        )
+        logger.error("Batch truncated [%s]: %s", names, msg)
+        for i in unterminated:
+            _record_failure(ids[i], config, manifest, stats, progress, msg)
+        # Only retry notes that were cleanly omitted (not cut off).
+        missing = [i for i in missing if i not in unterminated]
 
     if missing and len(batch) > 1:
         logger.warning("Batch response incomplete (%d/%d parsed); retrying missing note(s) individually.",
@@ -131,8 +173,10 @@ def _process_batch(batch, client, config: Config, manifest, stats, progress, _re
         raw_path = config.review_dir / f.relative_to(config.input_dir).with_suffix(".raw_response.txt")
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         raw_path.write_text(raw, encoding="utf-8")
+        done_reason = getattr(client, "last_done_reason", None) or "unknown"
         _record_failure(f, config, manifest, stats, progress,
-                         "Could not parse model response; raw output saved to review folder.")
+                         f"Could not parse model response (done_reason={done_reason}, "
+                         f"{len(raw)} chars); raw output saved to review folder.")
 
 
 def _record_failure(f: Path, config: Config, manifest, stats, progress, error: str) -> None:
