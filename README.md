@@ -2,7 +2,7 @@
 
 Extract PDF lecture notes **1:1** (layout and accents preserved, no LLM
 rewrite), then optionally batch-convert those notes into atomic,
-RAG-friendly Obsidian notes using a local LLM (via [Ollama](https://ollama.com)).
+RAG-friendly notes using a local LLM (via [Ollama](https://ollama.com)).
 
 ```
 PDF folder ──▶ extract (PyMuPDF, Unicode) ──▶ <folder>_extracted/*.md
@@ -11,6 +11,12 @@ PDF folder ──▶ extract (PyMuPDF, Unicode) ──▶ <folder>_extracted/*.m
                               format (optional LLM rewrite) ──▶ vault_processed
                                                               └── vault_review
 ```
+
+Three subcommands:
+
+- `extract` — PDF → Markdown/text, 1:1, no LLM.
+- `format` — LLM rewrite of already-extracted notes.
+- `run` — one-shot: `extract` then `format` on the staging folder.
 
 Originals are **never modified**. Already-processed, unchanged notes are
 **skipped** on the next run. Failed notes are **retried automatically**
@@ -66,14 +72,47 @@ optional step that sends already-extracted `.md` notes to your local model.
 - For `format`: [Ollama](https://ollama.com) running (`ollama serve`), with
   a model pulled (e.g. `ollama pull llama3.1`)
 
-## Install
+## Installation
+Python 3.9 or newer is required.
 
 ```bash
-git clone <this-repo>
-cd nexus-note-formatter
-pip install -r requirements.txt
-cp config.example.yaml config.yaml
+git clone <repository-url>
+cd nexus-formatter
+python3 -m venv .venv # Create a virtual environment
 ```
+
+If this command fails because `venv` is missing, install it using your distribution's package manager. On Ubuntu and Debian:
+
+```bash
+sudo apt update
+sudo apt install python3-venv
+```
+
+Then 
+
+```bash
+source .venv/bin/activate # Activate virtual environment
+python -m pip install --upgrade pip 
+python -m pip install -r requirements.txt # Install the required packages
+cp config.example.yaml config.yaml # Configure the formatter
+```
+Edit `config.yaml` to configure your model, input directories, output directories, and other settings.
+
+```bash
+python main.py --help # Run the formatter
+```
+
+Follow the CLI instructions to extract or process your documents.
+
+### Requirements
+
+- Python 3.9+
+- pip and Python virtual environment support
+- PyMuPDF for PDF extraction
+- Ollama and a compatible model, if using the Ollama provider
+
+**Note:** Activate the virtual environment with `source .venv/bin/activate` whenever you open a new terminal to work on the project. Run `deactivate` to exit it.
+
 
 Edit `config.yaml`: at minimum, set `input_dir` to the folder of raw notes
 you want to convert, and `model` to whatever you pulled in Ollama.
@@ -82,23 +121,55 @@ you want to convert, and `model` to whatever you pulled in Ollama.
 
 ```bash
 python main.py --help
-python main.py extract --help
-python main.py format --help
+python main.py --version
+```
 
-# 1:1 PDF → markdown in a sibling folder (no LLM)
+### `run` — extract + format in one shot
+
+```bash
+python main.py run --help
+python main.py run ./lectures_pdf
+python main.py run ./lectures_pdf --dry-run
+python main.py run ./lectures_pdf --json
+python main.py run ./lectures_pdf --staging-dir ./notes_raw --extract-format txt
+```
+
+`run` extracts PDFs into a staging folder (default: `<input-folder>_extracted`,
+override with `--staging-dir`), then runs the LLM formatter on that staging
+folder. Output goes to `config.output_dir`. With `--json`, a single JSON
+object is printed to stdout containing `extract`, `format`, `staging_dir`,
+`output_dir`, and `dry_run`.
+
+### `extract` — 1:1 PDF → Markdown/text (no LLM)
+
+```bash
+python main.py extract --help
 python main.py extract ./lectures_pdf
 # writes ./lectures_pdf_extracted/*.md  (nested PDFs keep their subfolders)
 
 python main.py extract ./lectures_pdf --dry-run
 python main.py extract ./lectures_pdf --format txt --force
 python main.py extract ./lectures_pdf/chap1.pdf -o ./notes_raw
+python main.py extract ./lectures_pdf --only chap1.pdf --json
+```
 
-# Optional: LLM rewrite of already-extracted notes
+Options: `-o/--output`, `--format {md,txt}`, `--force`, `--dry-run`,
+`--only`, `--log-dir`, `--json`, `-v/--verbose`.
+
+### `format` — optional LLM rewrite of extracted notes
+
+```bash
+python main.py format --help
 python main.py format --input ./lectures_pdf_extracted --dry-run
 python main.py format --input ./lectures_pdf_extracted
 python main.py format --force
 python main.py format --only TCP.md --verbose
 ```
+
+Options: `--config`, `--input`, `--output`, `--review`, `--log-dir`,
+`--state-dir`, `--prompt-template`, `--model`, `--base-url`,
+`--temperature`, `--timeout`, `--retries`, `--batch-size`, `--max-chars`,
+`--force`, `--dry-run`, `--only`, `--json`, `-v/--verbose`.
 
 Bare flags (`python main.py --dry-run`) still run `format` for compatibility.
 Every setting in `config.yaml` can be overridden on the command line, e.g.
@@ -112,7 +183,7 @@ see Limitations below).
 lectures_pdf/                 originals (never touched)
   week1/chap1.pdf
 
-lectures_pdf_extracted/       sibling folder written by `extract`
+lectures_pdf_extracted/       sibling folder written by `extract` (or `run` staging)
   week1/chap1.md              1:1 text, UTF-8, page breaks as ---
 
 vault_raw/                    your original notes (never touched)
@@ -203,6 +274,8 @@ Ideas from the original design discussion that are still out of scope:
   failures — check `vault_review/quality_report.md` and `logs/failed.csv`
   after your first run against a new model.
 - Scanned image-only PDFs have no text layer; this extractor cannot OCR them.
+- `run` always re-extracts into the staging folder before formatting; use
+  `extract` and `format` separately if you want to skip the extract step.
 
 ## License
 
